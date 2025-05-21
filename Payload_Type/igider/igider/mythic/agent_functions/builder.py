@@ -26,9 +26,11 @@ class Igider(PayloadType):
     wrapper = False
     wrapped_payloads = ["pickle_wrapper"]
     mythic_encrypts = True
-    note = "Production-ready Python agent with advanced obfuscation and encryption features"
+    note = "Python agent for command execution"
     supports_dynamic_loading = True
-    build_parameters = []
+    build_parameters = [
+        # No HTTPS check parameter needed since SSL is not used
+    ]
     c2_profiles = ["http"]
     
     # Use relative paths that can be configured
@@ -50,7 +52,6 @@ class Igider(PayloadType):
         BuildStep(step_name="Initializing Build", step_description="Setting up the build environment"),
         BuildStep(step_name="Gathering Components", step_description="Collecting agent code modules"),
         BuildStep(step_name="Configuring Agent", step_description="Applying configuration parameters"),
-        BuildStep(step_name="Applying Obfuscation", step_description="Implementing obfuscation techniques"),
         BuildStep(step_name="Finalizing Payload", step_description="Preparing final output format")
     ]
 
@@ -99,6 +100,8 @@ class Igider(PayloadType):
             elif value is not None:
                 code = code.replace(key, str(value))
         return code
+        
+    # No obfuscation needed
 
     async def build(self) -> BuildResponse:
         """Build the Igider payload with the specified configuration."""
@@ -123,15 +126,19 @@ class Igider(PayloadType):
                 
             base_code = self._load_module_content(base_agent_path)
             
-            
             # Load command modules
             command_code = ""
-            for cmd in self.commands.get_commands():
-                command_path = self.get_file_path(self.agent_code_path, cmd)
-                if not command_path:
-                    build_errors.append(f"Command module '{cmd}' not found")
-                else:
-                    command_code += self._load_module_content(command_path) + "\n"
+            commands = self.commands.get_commands()
+            if not commands:
+                await self.update_build_step("Gathering Components", "Warning: No command modules specified", True)
+                build_errors.append("No command modules specified")
+            else:
+                for cmd in commands:
+                    command_path = self.get_file_path(self.agent_code_path, cmd)
+                    if not command_path:
+                        build_errors.append(f"Command module '{cmd}' not found")
+                    else:
+                        command_code += self._load_module_content(command_path) + "\n"
             
             # Step 3: Configure agent
             await self.update_build_step("Configuring Agent", "Applying agent configuration...")
@@ -140,30 +147,28 @@ class Igider(PayloadType):
             base_code = base_code.replace("UUID_HERE", self.uuid)
             base_code = base_code.replace("#COMMANDS_PLACEHOLDER", command_code)
             
-            
             # Process C2 profile configuration
+            c2_profiles_found = False
             for c2 in self.c2info:
+                c2_profiles_found = True
                 profile = c2.get_c2profile()["name"]
-                base_code = self._apply_config_replacements(base_code, c2.get_parameters_dict())
+                c2_params = c2.get_parameters_dict()
+                base_code = self._apply_config_replacements(base_code, c2_params)
+                
+            if not c2_profiles_found:
+                build_errors.append("No C2 profiles configured")
+                await self.update_build_step("Configuring Agent", "Warning: No C2 profiles configured", True)
             
-            # Configure HTTPS certificate validation
-            if self.get_parameter("https_check") == "No":
-                base_code = base_code.replace("urlopen(req)", "urlopen(req, context=gcontext)")
-                base_code = base_code.replace("#CERTSKIP", 
-                """
-        gcontext = ssl.create_default_context()
-        gcontext.check_hostname = False
-        gcontext.verify_mode = ssl.CERT_NONE\n""")
+            # Configure agent connection - no SSL configuration needed
+            if hasattr(self, 'get_parameter'):
+                # Process other parameters if needed
+                pass
             else:
-                base_code = base_code.replace("#CERTSKIP", "")
+                await self.update_build_step("Configuring Agent", "Warning: Cannot access parameters", True)
+                build_errors.append("Parameter access method unavailable")
             
-            # Step 4: Apply obfuscation
-            await self.update_build_step("Applying Obfuscation", "Implementing code obfuscation...")
-            
-            
-            # Step 5: Finalize payload format
+            # Step 4: Finalize payload format (skipping obfuscation)
             await self.update_build_step("Finalizing Payload", "Preparing output in requested format...")
-            
             
             resp.payload = base_code.encode()
             resp.build_message = "Successfully built Python script payload"
