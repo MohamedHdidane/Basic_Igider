@@ -464,15 +464,22 @@ def check_environment():
             
             # Add user-selected options
             exe_options = self.get_parameter("exe_options") or []
+            use_onefile = "--onefile" in exe_options
+            
             for option in exe_options:
                 if option == "--onefile":
                     cmd.append('--onefile')
                 elif option == "--noconsole":
-                    cmd.append('--noconsole')
+                    cmd.append('--windowed')  # Use --windowed instead of --noconsole
                 elif option == "--strip":
                     cmd.append('--strip')
                 elif option == "--upx":
-                    cmd.append('--upx-dir=/usr/bin')  # Assumes UPX is in standard location
+                    # Check if UPX is available before using it
+                    try:
+                        subprocess.run(['upx', '--version'], capture_output=True, timeout=5)
+                        cmd.append('--upx-dir=/usr/bin')
+                    except:
+                        await self.update_build_step("Compiling EXE", "UPX not available, skipping compression")
             
             # Add icon if specified
             exe_icon = self.get_parameter("exe_icon")
@@ -491,17 +498,28 @@ def check_environment():
             common_imports = [
                 'base64', 'json', 'hashlib', 'itertools', 'datetime',
                 'socket', 'ssl', 'urllib', 'urllib.request', 'urllib.parse',
-                'platform', 'subprocess', 'threading', 'time', 'os', 'sys'
+                'platform', 'subprocess', 'threading', 'time', 'os', 'sys',
+                'zlib', 'random', 'string', 'logging', 'tempfile'
             ]
             
             for imp in common_imports:
                 cmd.extend(['--hidden-import', imp])
             
+            # Create dist and build directories
+            dist_dir = os.path.join(temp_dir, 'dist')
+            build_dir = os.path.join(temp_dir, 'build')
+            os.makedirs(dist_dir, exist_ok=True)
+            os.makedirs(build_dir, exist_ok=True)
+            
             # Specify output directory and name
-            cmd.extend(['--distpath', temp_dir])
-            cmd.extend(['--workpath', os.path.join(temp_dir, 'build')])
+            cmd.extend(['--distpath', dist_dir])
+            cmd.extend(['--workpath', build_dir])
             cmd.extend(['--specpath', temp_dir])
             cmd.extend(['--name', exe_name])
+            
+            # Add cleanup and optimization flags
+            cmd.append('--clean')
+            cmd.append('--noconfirm')
             
             # Add the Python file
             cmd.append(py_file)
@@ -511,19 +529,53 @@ def check_environment():
             # Run PyInstaller
             result = subprocess.run(cmd, cwd=temp_dir, capture_output=True, text=True, timeout=300)
             
+            # Log PyInstaller output for debugging
+            await self.update_build_step("Compiling EXE", f"PyInstaller STDOUT: {result.stdout}")
+            if result.stderr:
+                await self.update_build_step("Compiling EXE", f"PyInstaller STDERR: {result.stderr}")
+            
             if result.returncode != 0:
                 error_msg = f"PyInstaller failed with return code {result.returncode}\nSTDOUT: {result.stdout}\nSTDERR: {result.stderr}"
                 await self.update_build_step("Compiling EXE", error_msg, False)
                 return False, error_msg, b""
             
-            # Find the generated EXE
-            if "--onefile" in exe_options:
-                exe_path = os.path.join(temp_dir, f"{exe_name}.exe")
-            else:
-                exe_path = os.path.join(temp_dir, exe_name, f"{exe_name}.exe")
+            # Find the generated EXE - try multiple possible locations
+            possible_paths = []
             
-            if not os.path.exists(exe_path):
-                error_msg = f"EXE file not found at expected location: {exe_path}"
+            if use_onefile:
+                # For --onefile, EXE should be directly in dist directory
+                possible_paths.extend([
+                    os.path.join(dist_dir, f"{exe_name}.exe"),
+                    os.path.join(dist_dir, f"{exe_name}"),
+                    os.path.join(temp_dir, f"{exe_name}.exe"),
+                    os.path.join(temp_dir, f"{exe_name}")
+                ])
+            else:
+                # For regular build, EXE should be in subdirectory
+                possible_paths.extend([
+                    os.path.join(dist_dir, exe_name, f"{exe_name}.exe"),
+                    os.path.join(dist_dir, exe_name, f"{exe_name}"),
+                    os.path.join(dist_dir, f"{exe_name}.exe"),
+                    os.path.join(dist_dir, f"{exe_name}")
+                ])
+            
+            exe_path = None
+            for path in possible_paths:
+                if os.path.exists(path):
+                    exe_path = path
+                    break
+            
+            if not exe_path:
+                # List directory contents for debugging
+                debug_info = []
+                for root, dirs, files in os.walk(temp_dir):
+                    for file in files:
+                        full_path = os.path.join(root, file)
+                        rel_path = os.path.relpath(full_path, temp_dir)
+                        debug_info.append(f"  {rel_path}")
+                
+                error_msg = f"EXE file not found. Searched locations:\n" + "\n".join(f"  {p}" for p in possible_paths)
+                error_msg += f"\n\nDirectory contents:\n" + "\n".join(debug_info)
                 await self.update_build_step("Compiling EXE", error_msg, False)
                 return False, error_msg, b""
             
@@ -531,7 +583,7 @@ def check_environment():
             with open(exe_path, 'rb') as f:
                 exe_data = f.read()
             
-            await self.update_build_step("Compiling EXE", f"Successfully compiled EXE ({len(exe_data)} bytes)")
+            await self.update_build_step("Compiling EXE", f"Successfully compiled EXE at {exe_path} ({len(exe_data)} bytes)")
             return True, "EXE compilation successful", exe_data
             
         except subprocess.TimeoutExpired:
