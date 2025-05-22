@@ -1,6 +1,10 @@
 FROM itsafeaturemythic/mythic_python_base:latest
 
-RUN pip install --no-cache-dir pyinstaller
+
+RUN apt-get update && apt-get install -y wine64 && rm -rf /var/lib/apt/lists/*
+
+
+RUN pip install --no-cache-dir pyinstaller cryptography pycryptodome
 
 WORKDIR /Mythic/
 

