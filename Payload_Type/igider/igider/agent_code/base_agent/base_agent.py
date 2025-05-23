@@ -5,7 +5,7 @@ import threading, queue
 
 CHUNK_SIZE = 51200
 
-
+class igider:
     """
     Determines and returns the operating system version.
     It prioritizes returning macOS version if available, otherwise returns the general system name and release.
