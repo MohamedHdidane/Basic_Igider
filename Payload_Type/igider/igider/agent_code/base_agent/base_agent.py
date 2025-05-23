@@ -39,7 +39,9 @@ class igider:
         This function assumes the server's response is prefixed with the agent's UUID.
         """
     def formatResponse(self, data):
-        return json.loads(data.replace(self.agent_config["UUID"],""))
+        decoded_data = data.decode('utf-8')
+        json_data = decoded_data.replace(self.agent_config["UUID"], "")
+        return json.loads(json_data)
 
         """
         Formats a message, sends it to the server using a POST request, decrypts the response, and then formats it as a JSON object.
